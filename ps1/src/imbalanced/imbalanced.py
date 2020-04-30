@@ -39,7 +39,7 @@ def main(train_path, validation_path, save_path):
     model = LogisticRegression()
     model.fit(x_train, y_train)
     y_valid_pred = model.predict(x_valid.T)
-    np.savetxt(output_path_naive,y_valid_pred)
+    np.savetxt(output_path_naive,y_valid_pred.T)
 
     # change predictions to binary
     y_valid_pred[y_valid_pred <= 0.5] = 0
@@ -85,7 +85,7 @@ def main(train_path, validation_path, save_path):
     model = LogisticRegression()
     model.fit(x_train_new, y_train_new)
     y_pred = model.predict(x_valid.T)
-    np.savetxt(output_path_upsampling,y_valid_pred)
+    np.savetxt(output_path_upsampling,y_pred.T)
 
     # change predictions to binary
     y_pred[y_pred <= 0.5] = 0
