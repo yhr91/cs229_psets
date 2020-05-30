@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.stats
 import os
+import copy
 
 PLOT_COLORS = ['red', 'green', 'blue', 'orange']  # Colors for your plots
 K = 4           # Number of Gaussians in the mixture model
@@ -26,10 +28,29 @@ def main(is_semi_supervised, trial_num):
     # *** START CODE HERE ***
     # (1) Initialize mu and sigma by splitting the n_examples data points uniformly at random
     # into K groups, then calculating the sample mean and covariance for each group
+    idx = list(range(len(x_all)))
+    np.random.shuffle(idx)
+
+    x_all = x_all[idx]
+    z_all = z_all[idx]
+
+    x_all_split = np.split(x_all,K)
+    mu = np.array([np.mean(x_all_split[i],0) for i in range(K)])
+    sigma = np.array([np.cov(x_all_split[i].T) for i in range(K)])
+
+    labeled_idxs = (z_all != UNLABELED).squeeze()
+    x_tilde = x_all[labeled_idxs, :]   # Labeled examples
+    z_tilde = z_all[labeled_idxs, :]   # Corresponding labels
+    x = x_all[~labeled_idxs, :]        # Unlabeled examples
+
     # (2) Initialize phi to place equal probability on each Gaussian
     # phi should be a numpy array of shape (K,)
+    phi = np.repeat(1.0/K,K)
+
     # (3) Initialize the w values to place equal probability on each Gaussian
     # w should be a numpy array of shape (m, K)
+    w = np.ones([np.sum(~labeled_idxs),K])*(1.0/K)
+    n = len(w)
     # *** END CODE HERE ***
 
     if is_semi_supervised:
@@ -44,7 +65,6 @@ def main(is_semi_supervised, trial_num):
             z_pred[i] = np.argmax(w[i])
 
     plot_gmm_preds(x, z_pred, is_semi_supervised, plot_id=trial_num)
-
 
 def run_em(x, w, phi, mu, sigma):
     """Problem 3(d): EM Algorithm (unsupervised).
@@ -64,7 +84,8 @@ def run_em(x, w, phi, mu, sigma):
         example x^(i) belonging to the j-th Gaussian in the mixture.
     """
     # No need to change any of these parameters
-    eps = 1e-3  # Convergence threshold
+    alpha = 20.  # Weight for the labeled examples
+    eps = 1e-3   # Convergence threshold
     max_iter = 1000
 
     # Stop when the absolute change in log-likelihood is < eps
@@ -73,17 +94,59 @@ def run_em(x, w, phi, mu, sigma):
     ll = prev_ll = None
     while it < max_iter and (prev_ll is None or np.abs(ll - prev_ll) >= eps):
         pass  # Just a placeholder for the starter code
-        # *** START CODE HERE
+        # *** START CODE HERE ***
         # (1) E-step: Update your estimates in w
+        n = len(x)
+        for j in range(w.shape[1]):
+            p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
+            for i in range(len(x)):
+                w[i, j] = phi[j] * p_xz.pdf(x[i])
+        w = w / np.sum(w, 1)[:, None]
+        w_js = np.sum(w,0)
+
         # (2) M-step: Update the model parameters phi, mu, and sigma
+        # Setting phi
+        den = n
+        num = [w_js[j] for j in range(K)]
+        phi = np.array(num)/den
+
+        # Setting mu
+        for j in range(K):
+            num = np.sum((w[:, j][:,None] * x), 0)
+            den =  w_js[j]
+            mu[j] = num / den
+
+        # Setting sigma
+        for j in range(K):
+            mat = np.zeros(sigma[0].shape)
+            for i in range(n):
+                mat += w[i, j] * np.matmul(np.matrix(x[i] - mu[j]).T,
+                                           np.matrix(x[i] - mu[j]))
+
+            sigma[j] = mat / w_js[j]
+
         # (3) Compute the log-likelihood of the data to check for convergence.
         # By log-likelihood, we mean `ll = sum_x[log(sum_z[p(x|z) * p(z)])]`.
         # We define convergence by the first iteration where abs(ll - prev_ll) < eps.
         # Hint: For debugging, recall part (a). We showed that ll should be monotonically increasing.
+        # Hint: Make sure to include alpha in your calculation of ll.
+        prev_ll = ll
+        ll = 0
+        for j in range(K):
+            p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
+
+            # Unsupervised term
+            ll += np.sum([w[i, j] * np.log((p_xz.pdf(x[i]) * phi[j]) / w[i, j])
+                          for i in range(n)])
+
+        if prev_ll is not None:
+            if (prev_ll>ll): print('ERROR: not converging')
+            if np.all(np.linalg.eigvals(sigma) > 0)!=True: print('ERROR: PSD')
+        print(ll)
+
         # *** END CODE HERE ***
 
     return w
-
 
 def run_semi_supervised_em(x, x_tilde, z_tilde, w, phi, mu, sigma):
     """Problem 3(e): Semi-Supervised EM Algorithm.
@@ -117,10 +180,62 @@ def run_semi_supervised_em(x, x_tilde, z_tilde, w, phi, mu, sigma):
         pass  # Just a placeholder for the starter code
         # *** START CODE HERE ***
         # (1) E-step: Update your estimates in w
+        n = len(x)
+        n_tilde = len(x_tilde)
+        for j in range(w.shape[1]):
+            p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
+            for i in range(len(x)):
+                w[i, j] = phi[j] * p_xz.pdf(x[i])
+        w = w / np.sum(w, 1)[:, None]
+        w_js = np.sum(w,0)
+
         # (2) M-step: Update the model parameters phi, mu, and sigma
+        # Setting phi
+        den = n + (alpha*n_tilde)
+        num = [w_js[j] + np.sum(z_tilde==j)*alpha for j in range(K)]
+        phi = np.array(num)/den
+
+        # Setting mu
+        for j in range(K):
+            num = np.sum((w[:, j][:,None] * x), 0) +\
+                   alpha*np.sum(x_tilde[np.where(z_tilde == j)[0]], 0)
+            den = np.sum(z_tilde == j)*alpha + w_js[j]
+            mu[j] = num / den
+
+        # Setting sigma
+        for j in range(K):
+            mat = np.zeros(sigma[0].shape)
+            for i in range(n):
+                mat += w[i, j] * np.matmul(np.matrix(x[i] - mu[j]).T,
+                                           np.matrix(x[i] - mu[j]))
+            for i in range(n_tilde):
+                mat += alpha * np.matmul(np.matrix(x_tilde[i] - mu[j]).T,
+                                         np.matrix(x_tilde[i] - mu[j]))
+            sigma[j] = mat / (w_js[j] + (alpha * n_tilde))
+
         # (3) Compute the log-likelihood of the data to check for convergence.
-        # Hint: Make sure to include alpha in your calculation of ll.
+        # By log-likelihood, we mean `ll = sum_x[log(sum_z[p(x|z) * p(z)])]`.
+        # We define convergence by the first iteration where abs(ll - prev_ll) < eps.
         # Hint: For debugging, recall part (a). We showed that ll should be monotonically increasing.
+        # Hint: Make sure to include alpha in your calculation of ll.
+        prev_ll = ll
+        ll = 0
+        for j in range(K):
+            p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
+
+            # Unsupervised term
+            ll += np.sum([w[i, j] * np.log((p_xz.pdf(x[i]) * phi[j]) / w[i, j])
+                          for i in range(n)])
+
+            #Supervised term
+            ll += alpha * np.sum([np.log((p_xz.pdf(x_tilde[i])))
+                        for i,z_ in enumerate(z_tilde) if z_ == j])
+
+        if prev_ll is not None:
+            if (prev_ll>ll):
+                print('ERROR: not converging')
+        print(ll)
+
         # *** END CODE HERE ***
 
     return w
@@ -149,7 +264,7 @@ def plot_gmm_preds(x, z, with_supervision, plot_id):
         alpha = 0.25 if z_ < 0 else 0.75
         plt.scatter(x_1, x_2, marker='.', c=color, alpha=alpha)
 
-    file_name = 'pred{}_{}.pdf'.format('_ss' if with_supervision else '', plot_id)
+    file_name = 'pred{}_{}.png'.format('_ss' if with_supervision else '', plot_id)
     save_path = os.path.join('.', file_name)
     plt.savefig(save_path)
 
@@ -189,11 +304,11 @@ if __name__ == '__main__':
     # Run NUM_TRIALS trials to see how different initializations
     # affect the final predictions with and without supervision
     for t in range(NUM_TRIALS):
-        main(is_semi_supervised=False, trial_num=t)
+        #main(is_semi_supervised=False, trial_num=t)
 
         # *** START CODE HERE ***
         # Once you've implemented the semi-supervised version,
         # uncomment the following line.
         # You do not need to add any other lines in this code block.
-        # main(is_semi_supervised=True, trial_num=t)
+        main(is_semi_supervised=True, trial_num=t)
         # *** END CODE HERE ***
