@@ -28,20 +28,12 @@ def main(is_semi_supervised, trial_num):
     # *** START CODE HERE ***
     # (1) Initialize mu and sigma by splitting the n_examples data points uniformly at random
     # into K groups, then calculating the sample mean and covariance for each group
-    idx = list(range(len(x_all)))
-    np.random.shuffle(idx)
+    x_all_rand = copy.deepcopy(x_all)
+    np.random.shuffle(x_all_rand)
 
-    x_all = x_all[idx]
-    z_all = z_all[idx]
-
-    x_all_split = np.split(x_all,K)
+    x_all_split = np.split(x_all_rand,K)
     mu = np.array([np.mean(x_all_split[i],0) for i in range(K)])
     sigma = np.array([np.cov(x_all_split[i].T) for i in range(K)])
-
-    labeled_idxs = (z_all != UNLABELED).squeeze()
-    x_tilde = x_all[labeled_idxs, :]   # Labeled examples
-    z_tilde = z_all[labeled_idxs, :]   # Corresponding labels
-    x = x_all[~labeled_idxs, :]        # Unlabeled examples
 
     # (2) Initialize phi to place equal probability on each Gaussian
     # phi should be a numpy array of shape (K,)
@@ -136,8 +128,11 @@ def run_em(x, w, phi, mu, sigma):
             p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
 
             # Unsupervised term
-            ll += np.sum([w[i, j] * np.log((p_xz.pdf(x[i]) * phi[j]) / w[i, j])
+            ll += np.sum([w[i, j] * np.log(p_xz.pdf(x[i]) * phi[j])
                           for i in range(n)])
+
+            #ll += np.sum([w[i, j] * np.log((p_xz.pdf(x[i]) * phi[j]) / w[i, j])
+            #              for i in range(n)])
 
         if prev_ll is not None:
             if (prev_ll>ll): print('ERROR: not converging')
@@ -197,21 +192,25 @@ def run_semi_supervised_em(x, x_tilde, z_tilde, w, phi, mu, sigma):
 
         # Setting mu
         for j in range(K):
+            # Common denominator
+            den = (np.sum(z_tilde == j)*alpha) + w_js[j]
+
+            # Setting mu
             num = np.sum((w[:, j][:,None] * x), 0) +\
                    alpha*np.sum(x_tilde[np.where(z_tilde == j)[0]], 0)
-            den = np.sum(z_tilde == j)*alpha + w_js[j]
             mu[j] = num / den
 
-        # Setting sigma
-        for j in range(K):
+            # Setting sigma
             mat = np.zeros(sigma[0].shape)
             for i in range(n):
                 mat += w[i, j] * np.matmul(np.matrix(x[i] - mu[j]).T,
                                            np.matrix(x[i] - mu[j]))
             for i in range(n_tilde):
-                mat += alpha * np.matmul(np.matrix(x_tilde[i] - mu[j]).T,
-                                         np.matrix(x_tilde[i] - mu[j]))
-            sigma[j] = mat / (w_js[j] + (alpha * n_tilde))
+                if z_tilde[i] == j:
+                    mat += alpha * np.matmul(np.matrix(x_tilde[i] - mu[j]).T,
+                                             np.matrix(x_tilde[i] - mu[j]))
+            sigma[j] = mat / den
+
 
         # (3) Compute the log-likelihood of the data to check for convergence.
         # By log-likelihood, we mean `ll = sum_x[log(sum_z[p(x|z) * p(z)])]`.
@@ -224,16 +223,19 @@ def run_semi_supervised_em(x, x_tilde, z_tilde, w, phi, mu, sigma):
             p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
 
             # Unsupervised term
-            ll += np.sum([w[i, j] * np.log((p_xz.pdf(x[i]) * phi[j]) / w[i, j])
+            ll += np.sum([w[i, j] * np.log(p_xz.pdf(x[i]) * phi[j])
                           for i in range(n)])
 
-            #Supervised term
-            ll += alpha * np.sum([np.log((p_xz.pdf(x_tilde[i])))
-                        for i,z_ in enumerate(z_tilde) if z_ == j])
+            # Supervised term
+            ll += alpha * np.sum([np.log(p_xz.pdf(x_tilde[i])*phi[j])
+                          for i,z_ in enumerate(z_tilde) if z_[0] == j])
 
         if prev_ll is not None:
             if (prev_ll>ll):
                 print('ERROR: not converging')
+            #assert(np.all(w != 0))
+            assert(np.sum(phi)<1.1)
+            assert([np.all(np.linalg.eigvals(sigma[i]) > 0) for i in range(K)])
         print(ll)
 
         # *** END CODE HERE ***
