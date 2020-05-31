@@ -28,7 +28,7 @@ def main(is_semi_supervised, trial_num):
     # *** START CODE HERE ***
     # (1) Initialize mu and sigma by splitting the n_examples data points uniformly at random
     # into K groups, then calculating the sample mean and covariance for each group
-    x_all_rand = copy.deepcopy(x_all)
+    x_all_rand = copy.deepcopy(x)
     np.random.shuffle(x_all_rand)
 
     x_all_split = np.split(x_all_rand,K)
@@ -124,15 +124,17 @@ def run_em(x, w, phi, mu, sigma):
         # Hint: Make sure to include alpha in your calculation of ll.
         prev_ll = ll
         ll = 0
+        p_xz = []
         for j in range(K):
-            p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
+            p_xz.append(scipy.stats.multivariate_normal(mu[j], sigma[j]))
 
-            # Unsupervised term
-            ll += np.sum([w[i, j] * np.log(p_xz.pdf(x[i]) * phi[j])
+        # Unsupervised term
+        #for i in range(n):
+        #    for j in range(K):
+        #        ll += np.sum(w[i, j] * np.log(p_xz[j].pdf(x[i]) * phi[j]/w[i, j]))
+
+            ll += np.sum([w[i, j] * np.log((p_xz[j].pdf(x[i]) * phi[j]) / w[i, j])
                           for i in range(n)])
-
-            #ll += np.sum([w[i, j] * np.log((p_xz.pdf(x[i]) * phi[j]) / w[i, j])
-            #              for i in range(n)])
 
         if prev_ll is not None:
             if (prev_ll>ll): print('ERROR: not converging')
@@ -185,18 +187,19 @@ def run_semi_supervised_em(x, x_tilde, z_tilde, w, phi, mu, sigma):
         w_js = np.sum(w,0)
 
         # (2) M-step: Update the model parameters phi, mu, and sigma
-        # Setting phi
+        # Setting phi (NEW)
+
         den = n + (alpha*n_tilde)
         num = [w_js[j] + np.sum(z_tilde==j)*alpha for j in range(K)]
         phi = np.array(num)/den
 
         # Setting mu
         for j in range(K):
-            # Common denominator
+            # Common denominator (NEW)
             den = (np.sum(z_tilde == j)*alpha) + w_js[j]
 
-            # Setting mu
-            num = np.sum((w[:, j][:,None] * x), 0) +\
+            # Setting mu (NEW)
+            num = np.sum((w[:, j][:,None] * x), 0)+\
                    alpha*np.sum(x_tilde[np.where(z_tilde == j)[0]], 0)
             mu[j] = num / den
 
@@ -205,10 +208,13 @@ def run_semi_supervised_em(x, x_tilde, z_tilde, w, phi, mu, sigma):
             for i in range(n):
                 mat += w[i, j] * np.matmul(np.matrix(x[i] - mu[j]).T,
                                            np.matrix(x[i] - mu[j]))
+
+            # (NEW)
             for i in range(n_tilde):
                 if z_tilde[i] == j:
                     mat += alpha * np.matmul(np.matrix(x_tilde[i] - mu[j]).T,
                                              np.matrix(x_tilde[i] - mu[j]))
+
             sigma[j] = mat / den
 
 
@@ -219,15 +225,19 @@ def run_semi_supervised_em(x, x_tilde, z_tilde, w, phi, mu, sigma):
         # Hint: Make sure to include alpha in your calculation of ll.
         prev_ll = ll
         ll = 0
+
+        p_xz = []
         for j in range(K):
-            p_xz = scipy.stats.multivariate_normal(mu[j], sigma[j])
+            p_xz.append(scipy.stats.multivariate_normal(mu[j], sigma[j]))
 
-            # Unsupervised term
-            ll += np.sum([w[i, j] * np.log(p_xz.pdf(x[i]) * phi[j])
-                          for i in range(n)])
+        # Unsupervised term
+        for i in range(n):
+            for j in range(K):
+                ll += np.sum(w[i, j] * np.log(p_xz[j].pdf(x[i]) * phi[j]/w[i, j]))
 
-            # Supervised term
-            ll += alpha * np.sum([np.log(p_xz.pdf(x_tilde[i])*phi[j])
+        # Supervised term
+        for j in range(K):
+            ll += alpha * np.sum([np.log(p_xz[j].pdf(x_tilde[i])*phi[j])
                           for i,z_ in enumerate(z_tilde) if z_[0] == j])
 
         if prev_ll is not None:
@@ -306,7 +316,7 @@ if __name__ == '__main__':
     # Run NUM_TRIALS trials to see how different initializations
     # affect the final predictions with and without supervision
     for t in range(NUM_TRIALS):
-        #main(is_semi_supervised=False, trial_num=t)
+        main(is_semi_supervised=False, trial_num=t)
 
         # *** START CODE HERE ***
         # Once you've implemented the semi-supervised version,
